@@ -7,23 +7,25 @@ SIM_DIR  := sim
 OBJ_DIR  := obj_dir
 
 RTL_SRCS := \
-    $(RTL_DIR)/sdp_bram.sv              \
-    $(RTL_DIR)/projection_unit.sv       \
-    $(RTL_DIR)/smooth_grad_unit.sv      \
-    $(RTL_DIR)/bounds_calc.sv           \
-    $(RTL_DIR)/prewitt_edge_unit.sv     \
-    $(RTL_DIR)/complexity_unit.sv       \
-    $(RTL_DIR)/drowsiness_detection_top.sv   # renamed to match module name
+    $(RTL_DIR)/sdp_bram.sv                   \
+    $(RTL_DIR)/projection_unit.sv            \
+    $(RTL_DIR)/smooth_grad_unit.sv           \
+    $(RTL_DIR)/bounds_calc.sv                \
+    $(RTL_DIR)/prewitt_edge_unit.sv          \
+    $(RTL_DIR)/complexity_unit.sv            \
+    $(RTL_DIR)/drowsiness_detection_top.sv
 
 TOP      := drowsiness_detection_top
 SIM_MAIN := $(SIM_DIR)/sim_main.cpp
-IMG      ?= test.jpg
+STB_HDR  := $(SIM_DIR)/stb_image.h $(SIM_DIR)/stb_image_write.h
+
+IMG ?= test.jpg
 
 # =============================================================================
 .PHONY: all
 all: $(OBJ_DIR)/V$(TOP)
 
-$(OBJ_DIR)/V$(TOP): $(RTL_SRCS) $(SIM_MAIN) $(SIM_DIR)/stb_image.h
+$(OBJ_DIR)/V$(TOP): $(RTL_SRCS) $(SIM_MAIN) $(STB_HDR)
 	verilator \
 	    --cc \
 	    --exe \
@@ -42,7 +44,7 @@ $(OBJ_DIR)/V$(TOP): $(RTL_SRCS) $(SIM_MAIN) $(SIM_DIR)/stb_image.h
 
 # =============================================================================
 .PHONY: trace
-trace: $(RTL_SRCS) $(SIM_MAIN) $(SIM_DIR)/stb_image.h
+trace: $(RTL_SRCS) $(SIM_MAIN) $(STB_HDR)
 	verilator \
 	    --cc \
 	    --exe \
@@ -65,7 +67,8 @@ trace: $(RTL_SRCS) $(SIM_MAIN) $(SIM_DIR)/stb_image.h
 run: all
 	$(OBJ_DIR)/V$(TOP) $(IMG)
 
-$(SIM_DIR)/stb_image.h:
+# Download stb headers if missing
+$(STB_HDR):
 	bash $(SIM_DIR)/get_stb.sh
 
 .PHONY: clean

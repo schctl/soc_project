@@ -1,3 +1,21 @@
+//=============================================================================
+// drowsiness_detection_top.sv
+//
+// Change vs previous version:
+//   Pass grad_done (= u_sg_ph.done) to bounds_calc as ph_grad_ready.
+//
+//   This fixes the timing race where bounds_calc was reading phg_bram
+//   (Ph gradient values) while u_sg_ph was still writing to it.
+//   u_sg_ph runs concurrently with bounds_calc during S3_GRAD; it takes
+//   ~1027 cycles to finish writing all gradient values.  bounds_calc's
+//   XSCAN only uses 512 cycles, so without the WAIT state it was entering
+//   YSCAN_GRAD ~515 cycles before phg_bram was populated.  Every read
+//   returned zero, y_grad_found was always false, and the fallback PHSCAN
+//   (which finds the absolute darkest row) landed on the nose bridge.
+//
+//   With ph_grad_ready connected, bounds_calc waits in its new WAIT state
+//   until grad_done fires, then reads a fully-written phg_bram.
+//=============================================================================
 `timescale 1ns/1ps
 
 module drowsiness_detection_top #(
@@ -7,7 +25,7 @@ module drowsiness_detection_top #(
     parameter SUM_W         = 17,
     parameter GRAD_W        = 18,
     parameter COMP_W        = 26,
-    parameter DROWSY_THRESH = 26'd18
+    parameter DROWSY_THRESH = 26'd500_000
 )(
     input  logic        clk,
     input  logic        rst_n,
@@ -17,7 +35,26 @@ module drowsiness_detection_top #(
     input  logic [7:0]  fb_data,
 
     output logic        drowsy,
-    output logic        decision_valid
+    output logic        decision_valid,
+
+    // ---- Debug / intermediate-stage outputs --------------------------------
+    output logic [8:0]  dbg_xmin,
+    output logic [8:0]  dbg_xmax,
+    output logic [8:0]  dbg_ymin,
+    output logic [8:0]  dbg_ymax,
+    output logic        dbg_bounds_valid,
+
+    output logic [17:0] dbg_gx_waddr,
+    output logic [7:0]  dbg_gx_wdata,
+    output logic        dbg_gx_wen,
+
+    output logic [17:0] dbg_gy_waddr,
+    output logic [7:0]  dbg_gy_wdata,
+    output logic        dbg_gy_wen,
+
+    output logic [17:0] dbg_edge_waddr,
+    output logic        dbg_edge_wbit,
+    output logic        dbg_edge_wen
 );
 
     // =========================================================================
@@ -47,7 +84,6 @@ module drowsiness_detection_top #(
             S0_IDLE  : if (start)       nstate = S1_FRAME;
             S1_FRAME : if (frame_done)  nstate = S2_PROJ;
             S2_PROJ  : if (proj_done)   nstate = S3_GRAD;
-            // Wait for bounds_calc to finish before starting edge detection
             S3_GRAD  : if (bounds_done) nstate = S6_EDGE;
             S6_EDGE  : if (edge_done)   nstate = S5_CMPLX;
             S5_CMPLX : if (cmplx_done)  nstate = S4_DECID;
@@ -94,10 +130,10 @@ module drowsiness_detection_top #(
         .clk(clk),.wr_en(phg_wen),.wr_addr(phg_waddr),.wr_data(phg_wdata),
         .rd_addr(phg_raddr),.rd_data(phg_rdata));
 
-    logic [17:0] edge_waddr, edge_raddr;
-    logic        edge_wbit,  edge_rbit,  edge_wen;
+    logic [17:0] edge_waddr_i, edge_raddr;
+    logic        edge_wbit_i, edge_rbit, edge_wen_i;
     sdp_bram #(.DEPTH(262144),.WIDTH(1),.ABITS(18)) u_edge_bram (
-        .clk(clk),.wr_en(edge_wen),.wr_addr(edge_waddr),.wr_data(edge_wbit),
+        .clk(clk),.wr_en(edge_wen_i),.wr_addr(edge_waddr_i),.wr_data(edge_wbit_i),
         .rd_addr(edge_raddr),.rd_data(edge_rbit));
 
     // =========================================================================
@@ -113,13 +149,14 @@ module drowsiness_detection_top #(
         .ph_waddr(ph_waddr),.ph_wdata(ph_wdata),.ph_wen(ph_wen),
         .done(frame_done));
 
-    // --- S2: Smooth + grad Pv ---
-    logic [8:0]   sg_src_raddr;
+    // --- S2/S3: Smooth + gradient (Pv then Ph) ---
+    logic [8:0]       sg_src_raddr;
     logic [SUM_W-1:0] sg_src_rdata;
-    logic         sg_done_pv, sg_done_ph;
+    logic             sg_done_pv, sg_done_ph;
 
-    assign pv_raddr    = (state == S2_PROJ) ? sg_src_raddr : '0;
-    assign ph_raddr    = (state == S3_GRAD) ? sg_src_raddr : '0;
+    logic [8:0] bounds_ph_raddr;
+    assign pv_raddr     = (state == S2_PROJ) ? sg_src_raddr : '0;
+    assign ph_raddr     = (state == S3_GRAD) ? sg_src_raddr : bounds_ph_raddr;
     assign sg_src_rdata = (state == S2_PROJ) ? pv_rdata : ph_rdata;
 
     smooth_grad_unit #(.LEN(512),.DW(SUM_W),.GW(GRAD_W)) u_sg_pv (
@@ -139,27 +176,42 @@ module drowsiness_detection_top #(
         .done(sg_done_ph));
 
     assign proj_done = sg_done_pv;
-    assign grad_done = sg_done_ph;
+    assign grad_done = sg_done_ph;   // <-- bounds_calc ph_grad_ready
 
-    // --- Bounds calc: runs during S3_GRAD, starts when Ph gradient is ready ---
-    // Enabled at start of S3_GRAD; finishes (bounds_done) before FSM advances
+    // --- Bounds calc ---
     logic [8:0] xmin, xmax, ymin, ymax;
 
     bounds_calc u_bounds (
         .clk(clk),.rst_n(rst_n),.en(state == S3_GRAD),
+        // NEW: tell bounds_calc when phg_bram is fully written
+        .ph_grad_ready(grad_done),
         .pvg_raddr(pvg_raddr),.pvg_rdata(pvg_rdata),
         .phg_raddr(phg_raddr),.phg_rdata(phg_rdata),
+        .ph_raddr(bounds_ph_raddr),.ph_rdata(ph_rdata),
         .xmin(xmin),.xmax(xmax),.ymin(ymin),.ymax(ymax),
-        .done(bounds_done));   // << was empty in v1
+        .done(bounds_done));
+
+    assign dbg_xmin         = xmin;
+    assign dbg_xmax         = xmax;
+    assign dbg_ymin         = ymin;
+    assign dbg_ymax         = ymax;
+    assign dbg_bounds_valid = bounds_done;
 
     // --- S6: Prewitt edge detection ---
     logic [17:0] edge_fb_addr;
+
     prewitt_edge_unit u_prewitt (
         .clk(clk),.rst_n(rst_n),.en(state == S6_EDGE),
         .xmin(xmin),.xmax(xmax),.ymin(ymin),.ymax(ymax),
         .fb_addr(edge_fb_addr),.fb_data(fb_data),
-        .edge_waddr(edge_waddr),.edge_wbit(edge_wbit),.edge_wen(edge_wen),
+        .edge_waddr(edge_waddr_i),.edge_wbit(edge_wbit_i),.edge_wen(edge_wen_i),
+        .gx_waddr(dbg_gx_waddr),.gx_wdata(dbg_gx_wdata),.gx_wen(dbg_gx_wen),
+        .gy_waddr(dbg_gy_waddr),.gy_wdata(dbg_gy_wdata),.gy_wen(dbg_gy_wen),
         .done(edge_done));
+
+    assign dbg_edge_waddr = edge_waddr_i;
+    assign dbg_edge_wbit  = edge_wbit_i;
+    assign dbg_edge_wen   = edge_wen_i;
 
     // --- S5: Complexity ---
     logic [COMP_W-1:0] compl_scaled;

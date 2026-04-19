@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
-# run once: downloads stb_image.h into the sim/ directory
-curl -sSL https://raw.githubusercontent.com/nothings/stb/master/stb_image.h \
-     -o stb_image.h && echo "stb_image.h downloaded OK"
+# Downloads stb_image.h and stb_image_write.h into the sim/ directory.
+# Run once before building: bash sim/get_stb.sh
+set -e
+BASE="https://raw.githubusercontent.com/nothings/stb/master"
+DIR="$(dirname "$0")/sim"   # sim/ when called from project root as `bash sim/get_stb.sh`
+
+curl -sSL "$BASE/stb_image.h"       -o "$DIR/stb_image.h"       && echo "OK: stb_image.h"
+curl -sSL "$BASE/stb_image_write.h" -o "$DIR/stb_image_write.h" && echo "OK: stb_image_write.h"

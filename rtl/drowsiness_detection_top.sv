@@ -25,7 +25,7 @@ module drowsiness_detection_top #(
     parameter SUM_W         = 17,
     parameter GRAD_W        = 18,
     parameter COMP_W        = 26,
-    parameter DROWSY_THRESH = 26'd500_000
+    parameter DROWSY_THRESH = 26'd250_000
 )(
     input  logic        clk,
     input  logic        rst_n,

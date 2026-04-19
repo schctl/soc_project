@@ -1,7 +1,6 @@
 drowsiness_sim.vcd
 sim/stb_image.h
 sim/stb_image_write.h
-run_tests.py
 obj_dir/
 data_out/
 dataset/

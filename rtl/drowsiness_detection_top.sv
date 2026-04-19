@@ -54,7 +54,10 @@ module drowsiness_detection_top #(
 
     output logic [17:0] dbg_edge_waddr,
     output logic        dbg_edge_wbit,
-    output logic        dbg_edge_wen
+    output logic        dbg_edge_wen,
+
+    output logic [COMP_W-1:0] dbg_compl_scaled,
+    output logic              dbg_cmplx_done
 );
 
     // =========================================================================
@@ -238,6 +241,9 @@ module drowsiness_detection_top #(
         .xmin(xmin),.xmax(xmax),.ymin(ymin),.ymax(ymax),
         .edge_raddr(edge_raddr),.edge_rbit(edge_rbit),
         .compl_scaled(compl_scaled),.done(cmplx_done));
+
+    assign dbg_compl_scaled = compl_scaled;
+    assign dbg_cmplx_done   = cmplx_done;
 
     // =========================================================================
     // fb_addr mux

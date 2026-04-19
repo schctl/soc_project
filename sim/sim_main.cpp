@@ -290,9 +290,16 @@ static int run_one_frame(Vdrowsiness_detection_top* dut, const char* imgpath)
 
     // --- Run until decision_valid ---
     bool bounds_written = false;
+    uint32_t last_compl_scaled = 0;
+    bool compl_seen = false;
 
     for (int cycle = 0; cycle < MAX_CYCLES; cycle++) {
         tick(dut);
+
+        if (dut->dbg_cmplx_done) {
+            last_compl_scaled = dut->dbg_compl_scaled;
+            compl_seen = true;
+        }
 
         // --- 2. Bounds overlay — write once, the cycle bounds_valid fires ---
         if (!bounds_written && dut->dbg_bounds_valid) {
@@ -376,6 +383,10 @@ static int run_one_frame(Vdrowsiness_detection_top* dut, const char* imgpath)
                  (unsigned long long)edge_writes,
                  (unsigned long long)edge_unique,
                  (unsigned long long)edge_one_writes);
+
+                 printf("[TB] COMPLEXITY: compl_scaled=%u%s\n",
+                   compl_seen ? last_compl_scaled : dut->dbg_compl_scaled,
+                     compl_seen ? "" : " (sampled at decision)");
 
             // --- 3. Edge images (fully populated after edge_done) ---
             write_gray_png((pfx + "_3_edge_gx.png").c_str(),  gx_buf);

@@ -18,98 +18,135 @@ module complexity_unit #(
     output logic [COMP_W-1:0] compl_scaled,
     output logic              done
 );
-    logic [ABITS-1:0] m_val;   // eye-region height
+    logic [ABITS-1:0] m_val;   // eye-region height in rows
     assign m_val = ymax - ymin + 9'd1;
 
     typedef enum logic [1:0] { IDLE, SCAN, FINISH, UNUSED } state_t;
     state_t state;
 
+    // Read-address generator (row-major scan over ROI)
     logic [ABITS-1:0] xi, yi;
-    logic              prev_bit;
-    logic [ABITS-1:0]  trans_cnt;
-    logic [ABITS-1:0]  row_idx;
+    logic             issue_done;
 
-    // Triangular weight (module-level, combinational - avoids any BLKSEQ risk)
-    logic [ABITS-1:0] half_m;
-    logic [9:0]       w_i;
-    assign half_m = m_val >> 1;
-    assign w_i    = (row_idx <= half_m)
-                  ? {1'b0, row_idx} << 1
-                  : {1'b0, (m_val - row_idx)} << 1;
+    // Response metadata to align returned edge_rbit with coordinates
+    logic             samp_valid;
+    logic [ABITS-1:0] samp_x, samp_y;
 
-    // Delayed row accumulation
-    logic [ABITS-1:0] row_idx_d1, trans_cnt_d1;
-    logic             row_end_d1;
+    // Transition-count state for current row
+    logic             prev_bit;
+    logic [ABITS-1:0] trans_cnt;
+
+    // Accumulator
     logic [COMP_W-1:0] acc;
+
+    // Triangular row weight (paper-style weighted transition sum)
+    function automatic [9:0] row_weight(
+        input logic [ABITS-1:0] row_idx,
+        input logic [ABITS-1:0] height
+    );
+        logic [ABITS-1:0] half_h;
+        begin
+            half_h = height >> 1;
+            if (row_idx <= half_h)
+                row_weight = {1'b0, row_idx} << 1;
+            else
+                row_weight = {1'b0, (height - row_idx)} << 1;
+        end
+    endfunction
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state        <= IDLE;
-            xi           <= '0;  yi <= '0;
+            xi           <= '0;
+            yi           <= '0;
+            issue_done   <= 1'b0;
+            samp_valid   <= 1'b0;
+            samp_x       <= '0;
+            samp_y       <= '0;
             acc          <= '0;
             done         <= '0;
             compl_scaled <= '0;
             trans_cnt    <= '0;
             prev_bit     <= '0;
-            row_idx      <= '0;
-            row_end_d1   <= '0;
+            edge_raddr   <= '0;
         end else begin
-            done       <= '0;
-            row_end_d1 <= '0;
+            logic [ABITS-1:0] row_idx_now;
+            logic [ABITS-1:0] row_trans_total;
+            logic [ABITS-1:0] add_trans;
+            logic [9:0]       w_row;
+
+            done <= '0;
+
+            // Derived values for currently returned sample (if valid)
+            row_idx_now     = samp_y - ymin;
+            add_trans       = ((samp_x > xmin) && (edge_rbit ^ prev_bit)) ? ABITS'(1) : '0;
+            row_trans_total = trans_cnt + add_trans;
+            w_row           = row_weight(row_idx_now, m_val);
 
             case (state)
                 // ------------------------------------------------------------
                 IDLE: if (en) begin
-                    state     <= SCAN;
-                    xi        <= xmin;
-                    yi        <= ymin;
-                    row_idx   <= '0;
-                    acc       <= '0;
-                    trans_cnt <= '0;
-                    prev_bit  <= '0;
+                    state      <= SCAN;
+                    xi         <= xmin;
+                    yi         <= ymin;
+                    issue_done <= 1'b0;
+                    samp_valid <= 1'b0;
+                    acc        <= '0;
+                    trans_cnt  <= '0;
+                    prev_bit   <= '0;
                 end
 
                 // ------------------------------------------------------------
                 SCAN: begin
-                    edge_raddr <= {yi, xi};
-
-                    // Count horizontal transitions
-                    if (xi > xmin)
-                        if (edge_rbit ^ prev_bit)
-                            trans_cnt <= trans_cnt + 9'd1;
-                    prev_bit <= edge_rbit;
-
-                    if (xi == xmax) begin
-                        // Capture final transition for this row
-                        row_idx_d1  <= row_idx;
-                        trans_cnt_d1 <= trans_cnt +
-                                        ABITS'(edge_rbit ^ prev_bit ? 1 : 0);
-                        row_end_d1  <= 1'b1;
-
-                        xi        <= xmin;
-                        trans_cnt <= '0;
-                        prev_bit  <= '0;
-
-                        if (yi == ymax) begin
-                            state <= FINISH;
+                    // 1) Process returned sample from previous cycle
+                    if (samp_valid) begin
+                        if (samp_x == xmin) begin
+                            // First pixel in row: establish baseline
+                            trans_cnt <= '0;
+                            prev_bit  <= edge_rbit;
                         end else begin
-                            yi      <= yi + 9'd1;
-                            row_idx <= row_idx + 9'd1;
+                            trans_cnt <= row_trans_total;
+                            prev_bit  <= edge_rbit;
                         end
-                    end else begin
-                        xi <= xi + 9'd1;
+
+                        // End of row: commit weighted transitions and reset
+                        if (samp_x == xmax) begin
+                            acc       <= acc + COMP_W'(row_trans_total) * COMP_W'(w_row);
+                            trans_cnt <= '0;
+                            prev_bit  <= '0;
+                        end
                     end
 
-                    // Accumulate delayed row (w_i is combinational from row_idx)
-                    if (row_end_d1)
-                        acc <= acc + COMP_W'(trans_cnt_d1) * COMP_W'(w_i);
+                    // 2) Issue next read address (until full ROI issued)
+                    if (!issue_done) begin
+                        edge_raddr <= {yi, xi};
+
+                        // Save metadata for returned sample in next cycle
+                        samp_x     <= xi;
+                        samp_y     <= yi;
+                        samp_valid <= 1'b1;
+
+                        if (xi == xmax) begin
+                            xi <= xmin;
+                            if (yi == ymax) begin
+                                issue_done <= 1'b1;
+                            end else begin
+                                yi <= yi + ABITS'(1);
+                            end
+                        end else begin
+                            xi <= xi + ABITS'(1);
+                        end
+                    end else begin
+                        // No further issues; drain one last sample
+                        if (samp_valid)
+                            samp_valid <= 1'b0;
+                        else
+                            state <= FINISH;
+                    end
                 end
 
                 // ------------------------------------------------------------
                 FINISH: begin
-                    // Flush last delayed accumulation
-                    if (row_end_d1)
-                        acc <= acc + COMP_W'(trans_cnt_d1) * COMP_W'(w_i);
                     compl_scaled <= acc;
                     done         <= 1'b1;
                     state        <= IDLE;

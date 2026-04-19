@@ -58,6 +58,15 @@ static uint8_t gx_buf   [IMG_W * IMG_H];   // |Gx| from prewitt
 static uint8_t gy_buf   [IMG_W * IMG_H];   // |Gy| from prewitt
 static uint8_t edge_buf [IMG_W * IMG_H];   // binary edge (0 or 255)
 
+// Write diagnostics
+static uint8_t gx_written   [IMG_W * IMG_H];
+static uint8_t gy_written   [IMG_W * IMG_H];
+static uint8_t edge_written [IMG_W * IMG_H];
+static uint64_t gx_writes = 0, gy_writes = 0, edge_writes = 0;
+static uint64_t gx_nonzero_writes = 0, gy_nonzero_writes = 0, edge_one_writes = 0;
+static uint8_t fb_x_seen[IMG_W];
+static uint8_t fb_y_seen[IMG_H];
+
 // Bounds (filled when dbg_bounds_valid fires)
 static int bounds_xmin = 0, bounds_xmax = IMG_W-1;
 static int bounds_ymin = 0, bounds_ymax = IMG_H-1;
@@ -72,6 +81,13 @@ static void clear_capture_buffers()
     memset(gx_buf,   0, sizeof gx_buf);
     memset(gy_buf,   0, sizeof gy_buf);
     memset(edge_buf, 0, sizeof edge_buf);
+    memset(gx_written,   0, sizeof gx_written);
+    memset(gy_written,   0, sizeof gy_written);
+    memset(edge_written, 0, sizeof edge_written);
+    gx_writes = gy_writes = edge_writes = 0;
+    gx_nonzero_writes = gy_nonzero_writes = edge_one_writes = 0;
+    memset(fb_x_seen, 0, sizeof fb_x_seen);
+    memset(fb_y_seen, 0, sizeof fb_y_seen);
 }
 
 // Load image → framebuf (nearest-neighbour resize to 512×512, force greyscale)
@@ -190,6 +206,15 @@ static void tick(Vdrowsiness_detection_top* dut)
 
     // ---- Capture intermediate outputs ----------------------------------------
 
+    // Track framebuffer address coverage (helps infer edge-stage scan region)
+    {
+        uint32_t a = dut->fb_addr & 0x3FFFF;
+        uint32_t x = a & 0x1FF;
+        uint32_t y = (a >> 9) & 0x1FF;
+        if (x < IMG_W) fb_x_seen[x] = 1;
+        if (y < IMG_H) fb_y_seen[y] = 1;
+    }
+
     // Bounds: latch when bounds_valid pulses
     if (dut->dbg_bounds_valid) {
         bounds_xmin = dut->dbg_xmin;
@@ -201,22 +226,34 @@ static void tick(Vdrowsiness_detection_top* dut)
     // Gx image
     if (dut->dbg_gx_wen) {
         uint32_t addr = dut->dbg_gx_waddr & 0x3FFFF;
-        if (addr < IMG_W * IMG_H)
+        if (addr < IMG_W * IMG_H) {
             gx_buf[addr] = dut->dbg_gx_wdata;
+            gx_written[addr] = 1;
+            gx_writes++;
+            if (dut->dbg_gx_wdata != 0) gx_nonzero_writes++;
+        }
     }
 
     // Gy image
     if (dut->dbg_gy_wen) {
         uint32_t addr = dut->dbg_gy_waddr & 0x3FFFF;
-        if (addr < IMG_W * IMG_H)
+        if (addr < IMG_W * IMG_H) {
             gy_buf[addr] = dut->dbg_gy_wdata;
+            gy_written[addr] = 1;
+            gy_writes++;
+            if (dut->dbg_gy_wdata != 0) gy_nonzero_writes++;
+        }
     }
 
     // Binary edge image (1 bit → 0 or 255)
     if (dut->dbg_edge_wen) {
         uint32_t addr = dut->dbg_edge_waddr & 0x3FFFF;
-        if (addr < IMG_W * IMG_H)
+        if (addr < IMG_W * IMG_H) {
             edge_buf[addr] = dut->dbg_edge_wbit ? 255 : 0;
+            edge_written[addr] = 1;
+            edge_writes++;
+            if (dut->dbg_edge_wbit) edge_one_writes++;
+        }
     }
 }
 
@@ -270,6 +307,75 @@ static int run_one_frame(Vdrowsiness_detection_top* dut, const char* imgpath)
 
         if (dut->decision_valid) {
             int result = (int)dut->drowsy;
+
+             uint64_t gx_unique = 0, gy_unique = 0, edge_unique = 0;
+             uint8_t gx_max = 0, gy_max = 0;
+            int gx_xmin = IMG_W, gx_xmax = -1, gx_ymin = IMG_H, gx_ymax = -1;
+            int gy_xmin = IMG_W, gy_xmax = -1, gy_ymin = IMG_H, gy_ymax = -1;
+            int fb_xmin = IMG_W, fb_xmax = -1, fb_ymin = IMG_H, fb_ymax = -1;
+            uint64_t fb_x_cov = 0, fb_y_cov = 0;
+             for (int i = 0; i < IMG_W * IMG_H; i++) {
+              gx_unique += gx_written[i] ? 1 : 0;
+              gy_unique += gy_written[i] ? 1 : 0;
+              edge_unique += edge_written[i] ? 1 : 0;
+              if (gx_buf[i] > gx_max) gx_max = gx_buf[i];
+              if (gy_buf[i] > gy_max) gy_max = gy_buf[i];
+                if (gx_written[i]) {
+                    int y = i / IMG_W;
+                    int x = i % IMG_W;
+                    if (x < gx_xmin) gx_xmin = x;
+                    if (x > gx_xmax) gx_xmax = x;
+                    if (y < gx_ymin) gx_ymin = y;
+                    if (y > gx_ymax) gx_ymax = y;
+                }
+                if (gy_written[i]) {
+                    int y = i / IMG_W;
+                    int x = i % IMG_W;
+                    if (x < gy_xmin) gy_xmin = x;
+                    if (x > gy_xmax) gy_xmax = x;
+                    if (y < gy_ymin) gy_ymin = y;
+                    if (y > gy_ymax) gy_ymax = y;
+                }
+             }
+            for (int x = 0; x < IMG_W; x++) {
+                if (fb_x_seen[x]) {
+                    fb_x_cov++;
+                    if (x < fb_xmin) fb_xmin = x;
+                    if (x > fb_xmax) fb_xmax = x;
+                }
+            }
+            for (int y = 0; y < IMG_H; y++) {
+                if (fb_y_seen[y]) {
+                    fb_y_cov++;
+                    if (y < fb_ymin) fb_ymin = y;
+                    if (y > fb_ymax) fb_ymax = y;
+                }
+            }
+
+             printf("[TB] BOUNDS: xmin=%d xmax=%d ymin=%d ymax=%d area=%d\n",
+                 bounds_xmin, bounds_xmax, bounds_ymin, bounds_ymax,
+                 (bounds_xmax - bounds_xmin + 1) * (bounds_ymax - bounds_ymin + 1));
+             printf("[TB] EDGE_DIAG: gx_writes=%llu gx_unique=%llu gx_nonzero_writes=%llu gx_max=%u\n",
+                 (unsigned long long)gx_writes,
+                 (unsigned long long)gx_unique,
+                 (unsigned long long)gx_nonzero_writes,
+                 (unsigned)gx_max);
+            if (gx_unique)
+                printf("[TB] EDGE_DIAG: gx_bbox=(%d,%d)-(%d,%d)\n", gx_xmin, gx_ymin, gx_xmax, gx_ymax);
+             printf("[TB] EDGE_DIAG: gy_writes=%llu gy_unique=%llu gy_nonzero_writes=%llu gy_max=%u\n",
+                 (unsigned long long)gy_writes,
+                 (unsigned long long)gy_unique,
+                 (unsigned long long)gy_nonzero_writes,
+                 (unsigned)gy_max);
+            if (gy_unique)
+                printf("[TB] EDGE_DIAG: gy_bbox=(%d,%d)-(%d,%d)\n", gy_xmin, gy_ymin, gy_xmax, gy_ymax);
+                 printf("[TB] EDGE_DIAG: fb_addr_x_cov=%llu x_range=(%d,%d) fb_addr_y_cov=%llu y_range=(%d,%d)\n",
+                     (unsigned long long)fb_x_cov, fb_xmin, fb_xmax,
+                     (unsigned long long)fb_y_cov, fb_ymin, fb_ymax);
+             printf("[TB] EDGE_DIAG: edge_writes=%llu edge_unique=%llu edge_one_writes=%llu\n",
+                 (unsigned long long)edge_writes,
+                 (unsigned long long)edge_unique,
+                 (unsigned long long)edge_one_writes);
 
             // --- 3. Edge images (fully populated after edge_done) ---
             write_gray_png((pfx + "_3_edge_gx.png").c_str(),  gx_buf);

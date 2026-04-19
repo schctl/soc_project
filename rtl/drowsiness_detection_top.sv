@@ -179,7 +179,9 @@ module drowsiness_detection_top #(
     assign grad_done = sg_done_ph;   // <-- bounds_calc ph_grad_ready
 
     // --- Bounds calc ---
+    logic [8:0] xmin_raw, xmax_raw, ymin_raw, ymax_raw;
     logic [8:0] xmin, xmax, ymin, ymax;
+    logic       bounds_done_raw;
 
     bounds_calc u_bounds (
         .clk(clk),.rst_n(rst_n),.en(state == S3_GRAD),
@@ -188,13 +190,29 @@ module drowsiness_detection_top #(
         .pvg_raddr(pvg_raddr),.pvg_rdata(pvg_rdata),
         .phg_raddr(phg_raddr),.phg_rdata(phg_rdata),
         .ph_raddr(bounds_ph_raddr),.ph_rdata(ph_rdata),
-        .xmin(xmin),.xmax(xmax),.ymin(ymin),.ymax(ymax),
-        .done(bounds_done));
+        .xmin(xmin_raw),.xmax(xmax_raw),.ymin(ymin_raw),.ymax(ymax_raw),
+        .done(bounds_done_raw));
 
-    assign dbg_xmin         = xmin;
-    assign dbg_xmax         = xmax;
-    assign dbg_ymin         = ymin;
-    assign dbg_ymax         = ymax;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            xmin <= '0;
+            xmax <= 9'd511;
+            ymin <= '0;
+            ymax <= 9'd511;
+        end else if (bounds_done_raw) begin
+            xmin <= xmin_raw;
+            xmax <= xmax_raw;
+            ymin <= ymin_raw;
+            ymax <= ymax_raw;
+        end
+    end
+
+    assign bounds_done = bounds_done_raw;
+
+    assign dbg_xmin         = bounds_done_raw ? xmin_raw : xmin;
+    assign dbg_xmax         = bounds_done_raw ? xmax_raw : xmax;
+    assign dbg_ymin         = bounds_done_raw ? ymin_raw : ymin;
+    assign dbg_ymax         = bounds_done_raw ? ymax_raw : ymax;
     assign dbg_bounds_valid = bounds_done;
 
     // --- S6: Prewitt edge detection ---

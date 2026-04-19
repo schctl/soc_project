@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 drowsy_dir = "dataset/drowsy"
 alert_dir = "dataset/alert"
 
-NUM_CASES = 5_000
+NUM_CASES = 15_000
 
 # Makefile target/binary
 SIM_BINARY = Path("obj_dir/Vdrowsiness_detection_top")
@@ -20,6 +20,7 @@ MAX_WORKERS = int(os.getenv("TEST_WORKERS", max(4, (os.cpu_count() or 4))))
 SAMPLE_PROB = 0.5
 
 COMPLEXITY_RE = re.compile(r"COMPLEXITY:\s*compl_scaled=(\d+)")
+CURRENT_DROWSY_THRESH = int(os.getenv("CURRENT_DROWSY_THRESH", "235000"))
 
 
 def ensure_built():
@@ -77,6 +78,39 @@ def gather_cases():
             count_alert += 1
 
     return cases
+
+
+def threshold_accuracy(thresh: int, drowsy_scores, alert_scores) -> float:
+    """Accuracy for rule: drowsy if complexity < thresh else alert."""
+    if not drowsy_scores and not alert_scores:
+        return 0.0
+
+    correct_drowsy = sum(1 for x in drowsy_scores if x < thresh)
+    correct_alert = sum(1 for x in alert_scores if x >= thresh)
+    total = len(drowsy_scores) + len(alert_scores)
+    return (correct_drowsy + correct_alert) / total if total else 0.0
+
+
+def best_threshold(drowsy_scores, alert_scores):
+    """Return (best_thresh, best_acc) by sweeping candidate thresholds."""
+    if not drowsy_scores or not alert_scores:
+        return None, None
+
+    # Candidate thresholds: class medians + all observed scores.
+    candidates = set(drowsy_scores)
+    candidates.update(alert_scores)
+    candidates.add(int(statistics.median(drowsy_scores)))
+    candidates.add(int(statistics.median(alert_scores)))
+
+    best_t = None
+    best_acc = -1.0
+    for t in sorted(candidates):
+        acc = threshold_accuracy(t, drowsy_scores, alert_scores)
+        if acc > best_acc:
+            best_acc = acc
+            best_t = t
+
+    return best_t, best_acc
 
 
 def main():
@@ -161,6 +195,15 @@ def main():
         print("----------------------------------------")
     else:
         print("Average ALERT complexity: N/A (no samples)")
+
+    if drowsy_scores and alert_scores:
+        current_acc = threshold_accuracy(CURRENT_DROWSY_THRESH, drowsy_scores, alert_scores)
+        best_t, best_acc = best_threshold(drowsy_scores, alert_scores)
+        print(f"Current threshold ({CURRENT_DROWSY_THRESH}) est. accuracy: {current_acc:.2%}")
+        if best_t is not None:
+            print(f"Recommended threshold from this run: {best_t}")
+            print(f"Best separable accuracy (single threshold): {best_acc:.2%}")
+        print("----------------------------------------")
 
     if drowsy_scores or alert_scores:
         try:

@@ -45,12 +45,14 @@ module complexity_unit #(
         input logic [ABITS-1:0] height
     );
         logic [ABITS-1:0] half_h;
+        logic [ABITS-1:0] last_row;
         begin
             half_h = height >> 1;
+            last_row = height - ABITS'(1);
             if (row_idx <= half_h)
                 row_weight = {1'b0, row_idx} << 1;
             else
-                row_weight = {1'b0, (height - row_idx)} << 1;
+                row_weight = {1'b0, (last_row - row_idx)} << 1;
         end
     endfunction
 

@@ -48,7 +48,7 @@ module bounds_calc #(
     parameter PW            = 17,
     parameter ABITS         = 9,
 
-    parameter EYE_HALF      = 60,
+    parameter EYE_HALF      = 45,
     parameter MIN_FACE_PIX  = 64,
     parameter GUARD_Y       = 60,
 
@@ -58,7 +58,7 @@ module bounds_calc #(
     //   eye minimum         ≈ y=230–250   ← 2nd crossing in window (captured)
     //   nose bridge begins  ≈ y=295+
     parameter SEARCH_TOP    = 150,
-    parameter SEARCH_BOT    = 290,
+    parameter SEARCH_BOT    = 275,
 
     parameter EYE_FALLBACK_Y = 210
 )(

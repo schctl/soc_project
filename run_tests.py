@@ -7,10 +7,12 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Paths to the datasets
-drowsy_dir = "dataset/drowsy"
-alert_dir = "dataset/alert"
+drowsy_dir = "dataset/DDD/drowsy"
+alert_dir = "dataset/DDD/alert"
+# drowsy_dir = "dataset/DDD-CEW/Closed_Eyes"
+# alert_dir = "dataset/DDD-CEW/Open_Eyes"
 
-NUM_CASES = 15_000
+NUM_CASES = 100
 
 # Makefile target/binary
 SIM_BINARY = Path("obj_dir/Vdrowsiness_detection_top")
@@ -199,11 +201,11 @@ def main():
     if drowsy_scores and alert_scores:
         current_acc = threshold_accuracy(CURRENT_DROWSY_THRESH, drowsy_scores, alert_scores)
         best_t, best_acc = best_threshold(drowsy_scores, alert_scores)
-        print(f"Current threshold ({CURRENT_DROWSY_THRESH}) est. accuracy: {current_acc:.2%}")
-        if best_t is not None:
-            print(f"Recommended threshold from this run: {best_t}")
-            print(f"Best separable accuracy (single threshold): {best_acc:.2%}")
-        print("----------------------------------------")
+        # print(f"Current threshold ({CURRENT_DROWSY_THRESH}) est. accuracy: {current_acc:.2%}")
+        # if best_t is not None:
+        #     print(f"Recommended threshold from this run: {best_t}")
+        #     print(f"Best separable accuracy (single threshold): {best_acc:.2%}")
+        # print("----------------------------------------")
 
     if drowsy_scores or alert_scores:
         try:
@@ -226,25 +228,25 @@ def main():
             axes[0].set_ylabel("Count")
             axes[0].legend()
 
-            box_data = []
-            box_labels = []
-            if drowsy_scores:
-                box_data.append(drowsy_scores)
-                box_labels.append("Drowsy")
-            if alert_scores:
-                box_data.append(alert_scores)
-                box_labels.append("Alert")
+            # box_data = []
+            # box_labels = []
+            # if drowsy_scores:
+            #     box_data.append(drowsy_scores)
+            #     box_labels.append("Drowsy")
+            # if alert_scores:
+            #     box_data.append(alert_scores)
+            #     box_labels.append("Alert")
 
-            if box_data:
-                axes[1].boxplot(box_data, tick_labels=box_labels, showmeans=True)
-            axes[1].set_title("Complexity Boxplot")
-            axes[1].set_ylabel("Complexity")
+            # if box_data:
+            #     axes[1].boxplot(box_data, tick_labels=box_labels, showmeans=True)
+            # axes[1].set_title("Complexity Boxplot")
+            # axes[1].set_ylabel("Complexity")
 
             fig.suptitle("Drowsiness Complexity Statistics")
             fig.tight_layout()
             fig.savefig(fig_path, dpi=160)
             plt.close(fig)
-            print(f"Saved visualization: {fig_path}")
+            # print(f"Saved visualization: {fig_path}")
         except Exception as e:
             print(f"Visualization skipped: {e}")
 

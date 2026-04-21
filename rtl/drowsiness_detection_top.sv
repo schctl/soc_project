@@ -27,7 +27,7 @@ module drowsiness_detection_top #(
     parameter COMP_W        = 26,
     // Tuned down from 250k after complexity-unit fixes and larger dataset stats.
     // This better separates current class medians (~208k drowsy, ~261k alert).
-    parameter DROWSY_THRESH = 26'd19_000
+    parameter DROWSY_THRESH = 26'd134_000
 )(
     input  logic        clk,
     input  logic        rst_n,

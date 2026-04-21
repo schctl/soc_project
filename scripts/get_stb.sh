@@ -3,7 +3,7 @@
 # Run once before building: bash sim/get_stb.sh
 set -e
 BASE="https://raw.githubusercontent.com/nothings/stb/master"
-DIR="$(dirname "$0")/sim"   # sim/ when called from project root as `bash sim/get_stb.sh`
+DIR="$(dirname "$0")/../sim"
 
 curl -sSL "$BASE/stb_image.h"       -o "$DIR/stb_image.h"       && echo "OK: stb_image.h"
 curl -sSL "$BASE/stb_image_write.h" -o "$DIR/stb_image_write.h" && echo "OK: stb_image_write.h"
